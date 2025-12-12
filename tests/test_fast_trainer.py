@@ -73,5 +73,30 @@ class TestFastTrainer(unittest.TestCase):
         trainer.step()
         self.assertNotEqual(trainer.log_evidence, prev_evidence)
 
+    def test_convergence_metrics(self):
+        """Test Skilling's H and remaining info calculations."""
+        trainer = FastTrainer(self.seqs, 1, 5, 20, n_jobs=1)
+        
+        # Mock likelihoods and evidence
+        trainer.step_count = 100  # Must be > 0 for H-hat
+        # Case 1: Early stage (wide spread of likelihoods)
+        trainer.model_likelihoods = [-100.0] * 20
+        trainer.log_evidence = -90.0
+        
+        # H = logZ - <L> = -90 - (-100) = 10
+        h_hat = trainer.get_skilling_h()
+        self.assertAlmostEqual(h_hat, 10.0, places=5)
+        
+        # Remaining = L_max - logZ = -100 - (-90) = -10 (should be clamped to 0)
+        rem = trainer.get_remaining_info()
+        self.assertEqual(rem, 0.0)
+        
+        # Case 2: Converged (logZ approaches L_max)
+        trainer.model_likelihoods = [-50.0] * 20
+        trainer.log_evidence = -50.0
+        
+        h_hat = trainer.get_skilling_h()
+        self.assertAlmostEqual(h_hat, 0.0, places=5)
+
 if __name__ == '__main__':
     unittest.main()
