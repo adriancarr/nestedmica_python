@@ -45,5 +45,20 @@ python3 -m nestedmica.apps.mocca_fast \
 - `source/`: Original Java source code (patched for baseline comparison).
 - `validate_complex.py`: Verification scripts.
 
-## License
-Based on NestedMICA (LGPL).
+## License and Credits
+
+This software is a Python port of **NestedMICA** (v0.8.0), originally developed by **Thomas Down** and **Genome Research Ltd**.
+
+### Original Software
+- **Author**: Thomas Down (@derkholm)
+- **Copyright**: (c) 2004-2007 Genome Research Ltd.
+- **License**: LGPL v2.1+
+- **Source**: [Sanger FTP](https://ftp.sanger.ac.uk/pub/resources/software/nmica/)
+
+### Citation
+If you use this software, please cite the original NestedMICA publication:
+> Down TA, Bergman CM. *NestedMICA: sensitive inference of over-represented motifs in nucleic acid sequence.*  
+> Nucleic Acids Res. 2007;35(20):e137. doi: 10.1093/nar/gkm787.
+
+This Python implementation preserves the core algorithms (Nested Sampling, Mosaic Background) while introducing new optimization techniques (Cython, Threading) and variable-length sampling improvements.
+
