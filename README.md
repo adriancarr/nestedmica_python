@@ -1,4 +1,5 @@
-# Nested MICA (Python Port)
+# NestedMICA Python
+
 
 A high-performance Python implementation of the Nested MICA motif discovery algorithm, featuring Cython optimization, parallel processing, and variable-length motif support.
 
