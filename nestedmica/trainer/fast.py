@@ -439,6 +439,46 @@ class FastTrainer:
         best_idx = int(np.argmax(self.model_likelihoods))
         return self.models[best_idx], self.model_likelihoods[best_idx]
     
+    def get_skilling_h(self) -> float:
+        """
+        Compute Skilling's H-hat: estimated information remaining.
+        
+        H-hat = log(Z) - <L> / N
+        
+        where <L> is the mean likelihood of the ensemble.
+        When H-hat approaches 0, the algorithm has converged.
+        
+        Returns:
+            float: H-hat in log2 scale (same as log_evidence).
+        """
+        if self.step_count == 0:
+            return np.inf
+        
+        mean_likelihood = np.mean(self.model_likelihoods)
+        # H-hat = log(Z) - <L>
+        # In our log2 scale: H = log_evidence - mean_likelihood
+        h_hat = self.log_evidence - mean_likelihood
+        return h_hat
+    
+    def get_remaining_info(self) -> float:
+        """
+        Estimate remaining information to be gathered.
+        
+        Uses the formula from Skilling (2006):
+        remaining = L_max - log(Z)
+        
+        When normalized by total info, gives fraction remaining.
+        
+        Returns:
+            float: Estimated remaining information in log2 scale.
+        """
+        if self.step_count == 0 or not self.model_likelihoods:
+            return np.inf
+        
+        max_likelihood = max(self.model_likelihoods)
+        remaining = max_likelihood - self.log_evidence
+        return max(0.0, remaining)
+    
     def cleanup(self) -> None:
         """Shutdown thread pool."""
         if self.executor:

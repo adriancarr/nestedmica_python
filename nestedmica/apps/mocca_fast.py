@@ -23,7 +23,10 @@ def main():
     parser.add_argument('-ensembleSize', type=int, default=20)
     parser.add_argument('-threads', type=int, default=-1, help='Number of threads (-1=all)')
     parser.add_argument('-out', required=True, help='Output XMS file')
-    parser.add_argument('-stopIqr', type=float, default=0.01)
+    parser.add_argument('-stopIqr', type=float, default=0.01, help='IQR convergence threshold (used with -convergenceMode iqr)')
+    parser.add_argument('-stopH', type=float, default=0.1, help='H-hat convergence threshold (default mode)')
+    parser.add_argument('-convergenceMode', choices=['skilling', 'iqr'], default='skilling', 
+                        help='Convergence criterion: skilling (H-hat) or iqr (default: skilling)')
     parser.add_argument('-checkpoint', help='File to save checkpoints to')
     parser.add_argument('-checkpointInterval', type=int, default=100)
     parser.add_argument('-restart', help='Checkpoint file to restart from')
@@ -62,16 +65,18 @@ def main():
         if cycle % 100 == 0:
             best_model, best_hood = trainer.get_best_model()
 
-            # Calculate IQR
+            # Calculate convergence metrics
             likelihoods = np.array(trainer.model_likelihoods)
             q75, q25 = np.percentile(likelihoods, [75, 25])
             iqr = q75 - q25
+            h_hat = trainer.get_skilling_h()
+            remaining = trainer.get_remaining_info()
 
             # Plotting
             plotter_l.add(best_hood)
             plotter_iqr.add(iqr)
             
-            print(f"\nCycle {cycle}: L={best_hood:.2f} LogZ={trainer.log_evidence:.2f} IQR={iqr:.4f}")
+            print(f"\nCycle {cycle}: L={best_hood:.2f} LogZ={trainer.log_evidence:.2f} IQR={iqr:.4f} H={remaining:.2f}")
             print("Likelihood History:")
             print(plotter_l.plot())
             
@@ -79,9 +84,14 @@ def main():
             if args.checkpoint and cycle % args.checkpointInterval == 0 and cycle > start_cycle:
                 save_checkpoint(trainer, args.checkpoint, cycle)
             
-            if iqr < args.stopIqr and cycle > start_cycle + 500:
-                print(f"Converged at Cycle {cycle} (IQR {iqr:.4f} < {args.stopIqr})")
-                break
+            # Convergence check
+            if cycle > start_cycle + 500:
+                if args.convergenceMode == 'skilling' and remaining < args.stopH:
+                    print(f"Converged at Cycle {cycle} (remaining info {remaining:.4f} < {args.stopH})")
+                    break
+                elif args.convergenceMode == 'iqr' and iqr < args.stopIqr:
+                    print(f"Converged at Cycle {cycle} (IQR {iqr:.4f} < {args.stopIqr})")
+                    break
     
     end_time = time.time()
     print(f"Finished in {end_time - start_time:.2f}s")
