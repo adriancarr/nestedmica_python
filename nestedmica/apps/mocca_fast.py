@@ -14,6 +14,7 @@ from nestedmica.trainer.fast import FastTrainer
 from nestedmica.utils.console import AsciiPlotter
 from nestedmica.utils.checkpoint import save_checkpoint, load_checkpoint
 from nestedmica.utils.export import export_xms, export_meme, export_pfm, export_transfac
+from nestedmica.utils.kmer_seeds import generate_seed_pwms
 
 def main():
     parser = argparse.ArgumentParser(description='Fast Cython-optimized Mocca')
@@ -36,6 +37,8 @@ def main():
     parser.add_argument('-noAdaptiveMCMC', action='store_false', dest='adaptiveMCMC', help='Use fixed proposals (default)')
     parser.add_argument('-format', choices=['xms', 'meme', 'pfm', 'transfac'], default='xms',
                         help='Output format (default: xms)')
+    parser.add_argument('-kmerSeeds', action='store_true', default=False,
+                        help='Use k-mer enrichment for seed initialization (MEME-style)')
     args = parser.parse_args()
     
     print(f"Loading sequences from {args.seqs}...")
@@ -52,10 +55,20 @@ def main():
             print(f"Failed to load checkpoint: {e}")
             return
     else:
+        # Generate k-mer seeds if requested
+        seed_pwms = None
+        if args.kmerSeeds:
+            print("Generating k-mer enrichment seeds...")
+            seed_pwms = generate_seed_pwms(sequences, args.numMotifs, args.motifLength)
+            if seed_pwms:
+                print(f"  Generated {len([s for s in seed_pwms if s is not None])} k-mer seeds")
+            else:
+                print("  No enriched k-mers found, using random initialization")
+        
         print("Initializing Cython Data-Oriented Threaded trainer...")
         trainer = FastTrainer(sequences, args.numMotifs, args.motifLength, 
                              args.ensembleSize, n_jobs=args.threads, bg_order=args.bgOrder,
-                             adaptive_mcmc=args.adaptiveMCMC)
+                             adaptive_mcmc=args.adaptiveMCMC, seed_pwms=seed_pwms)
     
     print("Starting sampling...")
     start_time = time.time()

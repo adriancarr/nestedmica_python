@@ -47,7 +47,8 @@ class FastTrainer:
     
     def __init__(self, sequences: List[Any], num_motifs: int, motif_length: int, 
                  ensemble_size: int, n_jobs: int = -1, both_strands: bool = True,
-                 bg_order: int = 3, adaptive_mcmc: bool = False):
+                 bg_order: int = 3, adaptive_mcmc: bool = False,
+                 seed_pwms: Optional[List[np.ndarray]] = None):
         """
         Initialize the trainer.
 
@@ -69,6 +70,7 @@ class FastTrainer:
         self.both_strands = both_strands
         self.bg_order = bg_order
         self.adaptive_mcmc = adaptive_mcmc
+        self.seed_pwms = seed_pwms  # Optional k-mer enrichment seeds
         
         # Number of parallel threads
         self.n_jobs = n_jobs if n_jobs > 0 else multiprocessing.cpu_count()
@@ -141,10 +143,15 @@ class FastTrainer:
             self.model_likelihoods.append(self._total_likelihood(model['motifs'], model['weights']))
     
     def _sample_model(self) -> Dict[str, Any]:
-        """Sample a new model from prior."""
+        """Sample a new model from prior (or from k-mer seeds if provided)."""
         motifs = []
-        for _ in range(self.num_motifs):
-            columns = sample_dirichlet_pwm(self.motif_length)
+        for i in range(self.num_motifs):
+            if self.seed_pwms and i < len(self.seed_pwms) and self.seed_pwms[i] is not None:
+                # Use provided seed PWM
+                columns = self.seed_pwms[i].copy()
+            else:
+                # Random Dirichlet sampling
+                columns = sample_dirichlet_pwm(self.motif_length)
             motifs.append(CythonWeightMatrix(columns))
         weights = np.ones(self.num_motifs, dtype=np.float64)
         return {'motifs': motifs, 'weights': weights}
