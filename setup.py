@@ -19,7 +19,7 @@ extensions = [
 
 setup(
     name="nestedmica",
-    version="1.1.0",
+    version="1.2.0",
     description="High-performance Nested Sampling Motif Discovery",
     ext_modules=cythonize(
         extensions,

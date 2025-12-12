@@ -1,3 +1,30 @@
+# Release v1.2.0: Higher-Order Backgrounds & Reverse Complement
+
+This release adds two biologically important features for improved motif specificity.
+
+## New Features 🚀
+
+### 1. Higher-Order Markov Background (default order-3)
+- **Learns** dinucleotide/trinucleotide patterns from input sequences
+- **Reduces** false positives in biased sequences (GC-rich, AT-rich)
+- **CLI**: `-bgOrder 3` (configurable 0-5)
+
+### 2. Reverse Complement Scanning (default ON)
+- **Scans** both DNA strands (forward + reverse complement)
+- **Essential** for TF binding sites which are strand-independent
+- **CLI**: Enabled by default via `both_strands=True`
+
+## Usage
+```bash
+# Default: order-3 background, both strands
+python3 -m nestedmica.apps.mocca_fast -seqs data.fa -numMotifs 2 -out result.xms
+
+# Custom background order
+python3 -m nestedmica.apps.discover -seqs data.fa -out discovered.xms -bgOrder 2
+```
+
+---
+
 # Release v1.1.0: Auto-Discovery & Bayesian Evidence
 
 This major release introduces automated motif discovery and rigorous statistical model selection.
@@ -23,12 +50,3 @@ This major release introduces automated motif discovery and rigorous statistical
 - **Performance**: Threaded batch processing remains ~3x faster than legacy Java.
 - **Validation**: Verified on complex synthetic datasets with variable signal strength.
 
-## Usage
-```bash
-# Auto-discover optimal motifs
-python3 -m nestedmica.apps.discover -seqs data.fa -out discovered.xms
-
-# Inspect Evidence
-# Output at end of run:
-# "GlobalLogEvidence: -195937.69"
-```

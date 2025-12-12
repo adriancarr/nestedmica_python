@@ -82,9 +82,49 @@ def create_weight_matrix(columns):
     return CythonWeightMatrix(columns)
 
 
+def reverse_complement_columns(np.ndarray[DTYPE_t, ndim=2] columns):
+    """
+    Compute reverse complement of a log2-space PWM.
+    - Reverse the order of columns (right-to-left).
+    - Swap A<->T (rows 0<->3) and C<->G (rows 1<->2).
+    
+    Args:
+        columns: 4 x L array of log2 probabilities (A, C, G, T order).
+        
+    Returns:
+        4 x L array representing the reverse complement motif.
+    """
+    # Reverse column order
+    cdef np.ndarray[DTYPE_t, ndim=2] rc = columns[:, ::-1].copy()
+    # Swap bases: A(0)<->T(3), C(1)<->G(2)
+    cdef np.ndarray[DTYPE_t, ndim=2] swapped = np.empty_like(rc)
+    swapped[0, :] = rc[3, :]  # A <- T
+    swapped[1, :] = rc[2, :]  # C <- G
+    swapped[2, :] = rc[1, :]  # G <- C
+    swapped[3, :] = rc[0, :]  # T <- A
+    return swapped
+
+
 # -------------------------------------------------------------
 # BATCH PROCESSING (Legacy CPU Scan)
 # -------------------------------------------------------------
+
+cdef inline long get_context_idx(long[:] indices, int pos, int order) nogil:
+    """
+    Compute context index from previous 'order' bases.
+    Uses base-4 encoding: A=0, C=1, G=2, T=3
+    Returns -1 if any base is invalid (N).
+    """
+    cdef long idx = 0
+    cdef int i
+    cdef long base
+    for i in range(order):
+        base = indices[pos - order + i]
+        if base < 0:
+            return -1
+        idx = idx * 4 + base
+    return idx
+
 
 def batch_likelihood(
     long[:, :] all_indices,
@@ -93,9 +133,11 @@ def batch_likelihood(
     long[:] motif_offsets,
     long[:] motif_lengths,
     double[:] motif_penalties,
-    double base_penalty
+    double base_penalty,
+    double[:, :] bg_model,
+    int bg_order
 ):
-    """CPU-based scan + DP."""
+    """CPU-based scan + DP (forward strand only) with higher-order background."""
     cdef int num_seqs = all_indices.shape[0]
     cdef int num_motifs = motif_offsets.shape[0]
     cdef double total_likelihood = 0.0
@@ -104,7 +146,7 @@ def batch_likelihood(
     
     with nogil:
         for i in range(num_seqs):
-            seq_hood = _compute_single_seq(
+            seq_hood = _compute_single_seq_bg(
                 all_indices[i], 
                 seq_lengths[i],
                 all_motif_columns, 
@@ -112,13 +154,111 @@ def batch_likelihood(
                 motif_lengths, 
                 motif_penalties, 
                 base_penalty,
-                num_motifs
+                num_motifs,
+                bg_model,
+                bg_order
             )
             total_likelihood += seq_hood
             
     return total_likelihood
 
 
+def batch_likelihood_dual(
+    long[:, :] all_indices,
+    long[:] seq_lengths,
+    double[:, :] all_motif_columns_fwd,
+    double[:, :] all_motif_columns_rc,
+    long[:] motif_offsets,
+    long[:] motif_lengths,
+    double[:] motif_penalties,
+    double base_penalty,
+    double[:, :] bg_model,
+    int bg_order
+):
+    """CPU-based scan + DP with BOTH strands and higher-order background."""
+    cdef int num_seqs = all_indices.shape[0]
+    cdef int num_motifs = motif_offsets.shape[0]
+    cdef double total_likelihood = 0.0
+    cdef int i
+    cdef double seq_hood
+    
+    with nogil:
+        for i in range(num_seqs):
+            seq_hood = _compute_single_seq_dual_bg(
+                all_indices[i], 
+                seq_lengths[i],
+                all_motif_columns_fwd,
+                all_motif_columns_rc,
+                motif_offsets, 
+                motif_lengths, 
+                motif_penalties, 
+                base_penalty,
+                num_motifs,
+                bg_model,
+                bg_order
+            )
+            total_likelihood += seq_hood
+            
+    return total_likelihood
+
+
+cdef double _compute_single_seq_bg(
+    long[:] indices, 
+    int seq_len,
+    double[:, :] all_motif_columns,
+    long[:] motif_offsets,
+    long[:] motif_lengths,
+    double[:] motif_penalties,
+    double base_penalty,
+    int num_motifs,
+    double[:, :] bg_model,
+    int bg_order
+) nogil:
+    """DP with higher-order background model (forward strand only)."""
+    cdef double *matrix = <double *> malloc((seq_len + 1) * sizeof(double))
+    if matrix == NULL: return 0.0 
+    cdef int idx_len = seq_len
+    cdef int i, m, wml
+    cdef double score, emit, from_score, path_score, bg_score
+    cdef long ctx_idx, base_idx
+    matrix[0] = 0.0
+    
+    for i in range(1, idx_len + 1):
+        # Get background score for this position
+        base_idx = indices[i-1]
+        if base_idx < 0:
+            bg_score = -2.0  # Fallback for N
+        elif bg_order == 0:
+            bg_score = bg_model[0, base_idx]
+        elif i > bg_order:
+            ctx_idx = get_context_idx(indices, i-1, bg_order)
+            if ctx_idx < 0:
+                bg_score = -2.0  # Fallback for N in context
+            else:
+                bg_score = bg_model[ctx_idx, base_idx]
+        else:
+            bg_score = -2.0  # Not enough context yet
+        
+        score = matrix[i-1] + bg_score + base_penalty
+        for m in range(num_motifs):
+            wml = motif_lengths[m]
+            if i >= wml:
+                emit = _scan_at_pos(
+                    indices, i - wml, wml, 
+                    all_motif_columns, motif_offsets[m]
+                )
+                if emit > NEG_INF:
+                    from_score = matrix[i - wml]
+                    path_score = from_score + emit + motif_penalties[m]
+                    score = addlog2(score, path_score)
+        matrix[i] = score
+    
+    cdef double result = matrix[idx_len]
+    free(matrix)
+    return result
+
+
+# Keep old function for backward compatibility (uses fixed bg_score)
 cdef double _compute_single_seq(
     long[:] indices, 
     int seq_len,
@@ -168,4 +308,116 @@ cdef double _scan_at_pos(long[:] indices, int start_pos, int length, double[:, :
     return score
 
 
+cdef double _compute_single_seq_dual(
+    long[:] indices, 
+    int seq_len,
+    double[:, :] all_motif_columns_fwd,
+    double[:, :] all_motif_columns_rc,
+    long[:] motif_offsets,
+    long[:] motif_lengths,
+    double[:] motif_penalties,
+    double base_penalty,
+    int num_motifs
+) nogil:
+    """DP with both strands (legacy, fixed bg_score)."""
+    cdef double *matrix = <double *> malloc((seq_len + 1) * sizeof(double))
+    if matrix == NULL: return 0.0 
+    cdef int idx_len = seq_len
+    cdef double bg_score = -2.0
+    cdef int i, m, wml
+    cdef double score, emit_fwd, emit_rc, emit, from_score, path_score
+    matrix[0] = 0.0
+    
+    for i in range(1, idx_len + 1):
+        score = matrix[i-1] + bg_score + base_penalty
+        for m in range(num_motifs):
+            wml = motif_lengths[m]
+            if i >= wml:
+                emit_fwd = _scan_at_pos(
+                    indices, i - wml, wml, 
+                    all_motif_columns_fwd, motif_offsets[m]
+                )
+                emit_rc = _scan_at_pos(
+                    indices, i - wml, wml, 
+                    all_motif_columns_rc, motif_offsets[m]
+                )
+                if emit_fwd > emit_rc:
+                    emit = emit_fwd
+                else:
+                    emit = emit_rc
+                    
+                if emit > NEG_INF:
+                    from_score = matrix[i - wml]
+                    path_score = from_score + emit + motif_penalties[m]
+                    score = addlog2(score, path_score)
+        matrix[i] = score
+    
+    cdef double result = matrix[idx_len]
+    free(matrix)
+    return result
 
+
+cdef double _compute_single_seq_dual_bg(
+    long[:] indices, 
+    int seq_len,
+    double[:, :] all_motif_columns_fwd,
+    double[:, :] all_motif_columns_rc,
+    long[:] motif_offsets,
+    long[:] motif_lengths,
+    double[:] motif_penalties,
+    double base_penalty,
+    int num_motifs,
+    double[:, :] bg_model,
+    int bg_order
+) nogil:
+    """DP with both strands and higher-order background model."""
+    cdef double *matrix = <double *> malloc((seq_len + 1) * sizeof(double))
+    if matrix == NULL: return 0.0 
+    cdef int idx_len = seq_len
+    cdef int i, m, wml
+    cdef double score, emit_fwd, emit_rc, emit, from_score, path_score, bg_score
+    cdef long ctx_idx, base_idx
+    matrix[0] = 0.0
+    
+    for i in range(1, idx_len + 1):
+        # Get background score for this position
+        base_idx = indices[i-1]
+        if base_idx < 0:
+            bg_score = -2.0
+        elif bg_order == 0:
+            bg_score = bg_model[0, base_idx]
+        elif i > bg_order:
+            ctx_idx = get_context_idx(indices, i-1, bg_order)
+            if ctx_idx < 0:
+                bg_score = -2.0
+            else:
+                bg_score = bg_model[ctx_idx, base_idx]
+        else:
+            bg_score = -2.0
+        
+        score = matrix[i-1] + bg_score + base_penalty
+        for m in range(num_motifs):
+            wml = motif_lengths[m]
+            if i >= wml:
+                emit_fwd = _scan_at_pos(
+                    indices, i - wml, wml, 
+                    all_motif_columns_fwd, motif_offsets[m]
+                )
+                emit_rc = _scan_at_pos(
+                    indices, i - wml, wml, 
+                    all_motif_columns_rc, motif_offsets[m]
+                )
+                if emit_fwd > emit_rc:
+                    emit = emit_fwd
+                else:
+                    emit = emit_rc
+                    
+                if emit > NEG_INF:
+                    from_score = matrix[i - wml]
+                    path_score = from_score + emit + motif_penalties[m]
+                    score = addlog2(score, path_score)
+        matrix[i] = score
+    
+    cdef double result = matrix[idx_len]
+    free(matrix)
+    return result

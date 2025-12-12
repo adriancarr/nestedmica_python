@@ -9,7 +9,13 @@ import multiprocessing
 from typing import List, Tuple, Dict, Any, Optional
 
 # Import Cython-optimized modules
-from nestedmica.model.cython_model import CythonWeightMatrix, batch_likelihood
+from nestedmica.model.cython_model import (
+    CythonWeightMatrix, 
+    batch_likelihood, 
+    batch_likelihood_dual,
+    reverse_complement_columns
+)
+from nestedmica.model.background import learn_markov_background, print_background_stats
 
 def sample_dirichlet_pwm(length: int, alpha: float = 1.0) -> np.ndarray:
     """
@@ -36,10 +42,12 @@ class FastTrainer:
         motif_length (int): Initial motif length (can change with Indel/Zap).
         ensemble_size (int): Number of particles in Nested Sampling ensemble.
         n_jobs (int): Number of threads.
+        both_strands (bool): If True, scan both forward and reverse complement.
     """
     
     def __init__(self, sequences: List[Any], num_motifs: int, motif_length: int, 
-                 ensemble_size: int, n_jobs: int = -1):
+                 ensemble_size: int, n_jobs: int = -1, both_strands: bool = True,
+                 bg_order: int = 3):
         """
         Initialize the trainer.
 
@@ -49,12 +57,16 @@ class FastTrainer:
             motif_length (int): Initial target length.
             ensemble_size (int): Population size.
             n_jobs (int): Threads (-1 for all cores).
+            both_strands (bool): Scan both strands (default: True).
+            bg_order (int): Background Markov order (default: 3).
         """
         self.sequences = sequences
         self.num_motifs = num_motifs
         self.motif_length = motif_length
         self.ensemble_size = ensemble_size
         self.num_sequences = len(sequences)
+        self.both_strands = both_strands
+        self.bg_order = bg_order
         
         # Number of parallel threads
         self.n_jobs = n_jobs if n_jobs > 0 else multiprocessing.cpu_count()
@@ -96,6 +108,10 @@ class FastTrainer:
             self.executor = None
             print("Using sequential processing")
         
+        # Learn higher-order background model
+        self.bg_model = learn_markov_background(sequences, order=bg_order)
+        print_background_stats(self.bg_model, bg_order)
+        
         # Pre-allocate for Dirichlet
         self._dirichlet_alpha = np.zeros(4, dtype=np.float64)
         
@@ -126,6 +142,7 @@ class FastTrainer:
         """
         Compute total likelihood for a set of motifs.
         Uses Cython and Threading for speed.
+        Supports both-strand scanning if self.both_strands is True.
         """
         
         # 1. Identify active motifs and build flattened arrays
@@ -145,9 +162,9 @@ class FastTrainer:
         motif_pen = np.log2(trans)
         motif_penalties = np.full(num_active, motif_pen, dtype=np.float64)
         
-        # Build flattened columns
+        # Build flattened columns (forward strand)
         active_cols_list = [motifs[i].columns for i in active_indices] 
-        all_motif_columns = np.concatenate(active_cols_list, axis=1)
+        all_motif_columns_fwd = np.concatenate(active_cols_list, axis=1)
         
         # Offsets and lengths
         lengths = np.array([cols.shape[1] for cols in active_cols_list], dtype=np.int64)
@@ -156,35 +173,75 @@ class FastTrainer:
         for i in range(num_active):
             offsets[i] = curr
             curr += lengths[i]
-            
-        # 2. Parallel Execution
-        if self.executor and self.num_sequences >= len(self.chunks):
-            futures = []
-            for start, end in self.chunks:
-                # Slicing creates lightweight views passed to Cython
-                # batch_likelihood releases GIL, so these run in parallel!
-                futures.append(self.executor.submit(
-                    batch_likelihood,
-                    self.all_indices[start:end],
-                    self.seq_lengths[start:end],
-                    all_motif_columns,
+        
+        # 2. Compute reverse complement columns if both_strands enabled
+        if self.both_strands:
+            rc_cols_list = [reverse_complement_columns(cols) for cols in active_cols_list]
+            all_motif_columns_rc = np.concatenate(rc_cols_list, axis=1)
+        
+        # 3. Execute likelihood calculation
+        if self.both_strands:
+            # Dual-strand mode
+            if self.executor and self.num_sequences >= len(self.chunks):
+                futures = []
+                for start, end in self.chunks:
+                    futures.append(self.executor.submit(
+                        batch_likelihood_dual,
+                        self.all_indices[start:end],
+                        self.seq_lengths[start:end],
+                        all_motif_columns_fwd,
+                        all_motif_columns_rc,
+                        offsets,
+                        lengths,
+                        motif_penalties,
+                        base_penalty,
+                        self.bg_model,
+                        self.bg_order
+                    ))
+                return sum(f.result() for f in futures)
+            else:
+                return batch_likelihood_dual(
+                    self.all_indices,
+                    self.seq_lengths,
+                    all_motif_columns_fwd,
+                    all_motif_columns_rc,
                     offsets,
                     lengths,
                     motif_penalties,
-                    base_penalty
-                ))
-            return sum(f.result() for f in futures)
+                    base_penalty,
+                    self.bg_model,
+                    self.bg_order
+                )
         else:
-            # Sequential call
-            return batch_likelihood(
-                self.all_indices,
-                self.seq_lengths,
-                all_motif_columns,
-                offsets,
-                lengths,
-                motif_penalties,
-                base_penalty
-            )
+            # Forward-strand only mode
+            if self.executor and self.num_sequences >= len(self.chunks):
+                futures = []
+                for start, end in self.chunks:
+                    futures.append(self.executor.submit(
+                        batch_likelihood,
+                        self.all_indices[start:end],
+                        self.seq_lengths[start:end],
+                        all_motif_columns_fwd,
+                        offsets,
+                        lengths,
+                        motif_penalties,
+                        base_penalty,
+                        self.bg_model,
+                        self.bg_order
+                    ))
+                return sum(f.result() for f in futures)
+            else:
+                return batch_likelihood(
+                    self.all_indices,
+                    self.seq_lengths,
+                    all_motif_columns_fwd,
+                    offsets,
+                    lengths,
+                    motif_penalties,
+                    base_penalty,
+                    self.bg_model,
+                    self.bg_order
+                )
 
     def _total_likelihood_from_columns(self, columns_list: List[np.ndarray], weights: np.ndarray) -> float:
         """Compute likelihood from raw column arrays."""

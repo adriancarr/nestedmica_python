@@ -27,6 +27,7 @@ def main():
     parser.add_argument('-checkpoint', help='File to save checkpoints to')
     parser.add_argument('-checkpointInterval', type=int, default=100)
     parser.add_argument('-restart', help='Checkpoint file to restart from')
+    parser.add_argument('-bgOrder', type=int, default=3, help='Background Markov order (0-5, default=3)')
     args = parser.parse_args()
     
     print(f"Loading sequences from {args.seqs}...")
@@ -45,7 +46,7 @@ def main():
     else:
         print("Initializing Cython Data-Oriented Threaded trainer...")
         trainer = FastTrainer(sequences, args.numMotifs, args.motifLength, 
-                             args.ensembleSize, n_jobs=args.threads)
+                             args.ensembleSize, n_jobs=args.threads, bg_order=args.bgOrder)
     
     print("Starting sampling...")
     start_time = time.time()
