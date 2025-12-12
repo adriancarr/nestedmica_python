@@ -34,7 +34,7 @@ class TestFastTrainer(unittest.TestCase):
         self.assertIsInstance(hood, float)
         
     def test_variable_length_methods(self):
-        # Test Zap (Deletion)
+        # Test Delete (Zap)
         # 4 cols -> 3 cols
         cols = np.zeros((4, 4))
         # Zap has min length constraint 5, so let's make it 6
@@ -43,13 +43,35 @@ class TestFastTrainer(unittest.TestCase):
         # We need access to private methods or expose them. 
         # Since they are logically private but practically accessible in Python:
         trainer = FastTrainer(self.seqs, 1, 6, 1, n_jobs=1)
-        zapped = trainer._zap_column(cols)
+        zapped = trainer._delete_column(cols)
         self.assertEqual(zapped.shape[1], 5)
         
-        # Test Indel (Insertion)
+        # Test Insert (Indel)
         # 6 cols -> 7 cols
-        indeling = trainer._indel_column(cols)
+        indeling = trainer._insert_column(cols)
         self.assertEqual(indeling.shape[1], 7)
+    def test_evidence_calculation(self):
+        # Create trainer with ensemble size 1 for simple math
+        # X_0 = 1, X_1 = e^-1, X_2 = e^-2
+        # w_1 = 0.5 * (X_0 - X_2) = 0.5 * (1 - e^-2)
+        # log_w1 approx log(0.5) + log(0.86) = -1 + (-0.21) = -1.21 (natural)
+        # We work in log2.
+        
+        trainer = FastTrainer(self.seqs, 1, 5, 10, n_jobs=1)
+        self.assertEqual(trainer.log_evidence, -np.float64('inf'))
+        self.assertEqual(trainer.step_count, 0)
+        
+        # Run one step
+        worst, hood = trainer.step()
+        
+        # Evidence should now be finite (log2 sum)
+        self.assertGreater(trainer.log_evidence, -1e9) 
+        self.assertEqual(trainer.step_count, 1)
+        
+        # Run another step
+        prev_evidence = trainer.log_evidence
+        trainer.step()
+        self.assertNotEqual(trainer.log_evidence, prev_evidence)
 
 if __name__ == '__main__':
     unittest.main()

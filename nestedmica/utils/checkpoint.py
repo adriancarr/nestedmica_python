@@ -32,7 +32,9 @@ def save_checkpoint(trainer: Any, filename: str, cycle: int) -> None:
         'model_likelihoods': trainer.model_likelihoods,
         'num_motifs': trainer.num_motifs,
         'motif_length': trainer.motif_length,
-        'ensemble_size': trainer.ensemble_size
+        'ensemble_size': trainer.ensemble_size,
+        'log_evidence': trainer.log_evidence,
+        'step_count': trainer.step_count
     }
     
     with open(filename, 'wb') as f:
@@ -66,4 +68,10 @@ def load_checkpoint(filename: str, sequences: List[Any], n_jobs: int, trainer_cl
         trainer.models.append({'motifs': motifs, 'weights': s_model['weights']})
         
     trainer.model_likelihoods = state['model_likelihoods']
+    
+    # Restore Evidence state if present (backward compatibility)
+    if 'log_evidence' in state:
+        trainer.log_evidence = state['log_evidence']
+        trainer.step_count = state['step_count']
+        
     return trainer, state['cycle']

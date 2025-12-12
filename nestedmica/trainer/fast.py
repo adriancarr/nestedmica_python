@@ -99,6 +99,10 @@ class FastTrainer:
         # Pre-allocate for Dirichlet
         self._dirichlet_alpha = np.zeros(4, dtype=np.float64)
         
+        # Evidence tracking
+        self.log_evidence = -np.inf # Log2 scale
+        self.step_count = 0
+        
         # Initialize ensemble
         self.models = []
         self.model_likelihoods = []
@@ -196,15 +200,15 @@ class FastTrainer:
         new_probs = np.random.dirichlet(self._dirichlet_alpha)
         return np.log2(new_probs + 1e-10)
 
-    def _zap_column(self, cols: np.ndarray) -> np.ndarray:
-        """Remove a random column (Zap)."""
+    def _delete_column(self, cols: np.ndarray) -> np.ndarray:
+        """Remove a random column (Delete)."""
         length = cols.shape[1]
         if length <= 5: return cols # Min length constraint
         idx = np.random.randint(length)
         return np.delete(cols, idx, axis=1)
 
-    def _indel_column(self, cols: np.ndarray) -> np.ndarray:
-        """Insert a random column (Indel)."""
+    def _insert_column(self, cols: np.ndarray) -> np.ndarray:
+        """Insert a random column (Insert)."""
         length = cols.shape[1]
         if length >= 20: return cols # Max length constraint
         idx = np.random.randint(length + 1)
@@ -224,7 +228,7 @@ class FastTrainer:
         best_hood = current_hood
         
         for step in range(max_steps):
-            # Choose move type: 0=Perturb(70%), 1=Zap(15%), 2=Indel(15%)
+            # Choose move type: 0=Perturb(70%), 1=Delete(15%), 2=Insert(15%)
             move_type = np.random.choice([0, 1, 2], p=[0.7, 0.15, 0.15])
             m_idx = np.random.randint(self.num_motifs)
             
@@ -235,11 +239,10 @@ class FastTrainer:
                 if length > 0:
                     c_idx = np.random.randint(length)
                     columns_list[m_idx][:, c_idx] = self._perturb_column_fast(old_cols[:, c_idx])
-            elif move_type == 1: # Zap
-                columns_list[m_idx] = self._zap_column(old_cols)
-            else: # Indel
-                columns_list[m_idx] = self._indel_column(old_cols)
-            
+            elif move_type == 1: # Delete
+                columns_list[m_idx] = self._delete_column(old_cols)
+            else: # Insert
+                columns_list[m_idx] = self._insert_column(old_cols)            
             # Check acceptance
             new_hood = self._total_likelihood_from_columns(columns_list, weights)
             
@@ -284,6 +287,55 @@ class FastTrainer:
         self.models.append(new_model)
         self.model_likelihoods.append(new_hood)
         
+        # --- Evidence Calculation (Log Space) ---
+        # Prior volume shrinkage factor: X_i = exp(-i / N)
+        # Weight w_i = 0.5 * (X_{i-1} - X_{i+1})
+        # log(w_i) = log(0.5) + log(X_{i-1} - X_{i+1})
+        
+        # For numerical stability with X close to 0:
+        # X_i = exp(-i/N)
+        # X_{i-1} = exp(-(i-1)/N) = X_i * exp(1/N)
+        # X_{i+1} = exp(-(i+1)/N) = X_i * exp(-1/N)
+        # w_i = 0.5 * X_i * (exp(1/N) - exp(-1/N))
+        # log(w_i) = log(0.5) + log(X_i) + log(exp(1/N) - exp(-1/N))
+        
+        # We track cumulative LogZ.
+        # Delta Z = L_min * w_i
+        # log(Delta Z) = log(L_min) + log(w_i)
+        
+        # Count is actually 'iterations done', which we need to track if we restart.
+        # But for new runs: i = 1, 2, ...
+        # We need a counter.
+        self.step_count += 1
+        i = self.step_count
+        N = self.ensemble_size
+        
+        # Calculate log(w_i)
+        # log(X_i) = -i / N
+        log_Xi = -float(i) / N
+        term = np.log(np.exp(1.0/N) - np.exp(-1.0/N))
+        log_wi = np.log(0.5) + log_Xi + term
+        
+        # Update LogZ
+        # min_hood is Log Likelihood (ln L or log2 L? Code uses log2 everywhere)
+        # Wait, Evidence integral requires natural log usually, or consistent base.
+        # Code uses log2 for PWMs and likelihoods.
+        # Let's stick to log2 for Z as well to differ only by scale factor.
+        # Z_2 = Integral (2^L * w)
+        # log2(dZ) = L_min + log2(w_i)
+        
+        log2_wi = log_wi / np.log(2) # Convert natural log weight to log2
+        log2_dZ = min_hood + log2_wi
+        
+        if self.log_evidence == -np.inf:
+            self.log_evidence = log2_dZ
+        else:
+            # logaddexp2 is not standard numpy, use logaddexp with conversion
+            # log2(a + b) = log2(2^a + 2^b) = log2(e^(a ln2) + e^(b ln2)) 
+            #             = np.logaddexp(a*ln2, b*ln2) / ln2
+            ln2 = np.log(2)
+            self.log_evidence = np.logaddexp(self.log_evidence * ln2, log2_dZ * ln2) / ln2
+
         return worst, min_hood
     
     def get_best_model(self) -> Tuple[Dict[str, Any], float]:
