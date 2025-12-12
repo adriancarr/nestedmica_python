@@ -1,9 +1,0 @@
-NestedMICA background models
-----------------------------
-
-This directory contains a set of background model files which may
-be useful to new users of the NestedMICA package
-
-   human.xml      A four-class background model trained from 192
-                  human promoters, as described in Down and Hubbard
-                  2005.  May also be a good choice for other mammals.

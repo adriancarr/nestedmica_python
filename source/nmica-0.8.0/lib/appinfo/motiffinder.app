@@ -1,2 +1,0 @@
-NMICA_APPCLASS=MotifFinderApplication
-NMICA_JVM=-server

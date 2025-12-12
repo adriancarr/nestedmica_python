@@ -1,1 +1,0 @@
-NMICA_APPCLASS=ConvertBGApplication
