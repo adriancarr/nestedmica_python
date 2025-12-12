@@ -13,9 +13,16 @@ from nestedmica.model.cython_model import (
     CythonWeightMatrix, 
     batch_likelihood, 
     batch_likelihood_dual,
-    reverse_complement_columns
+    reverse_complement_columns,
+    batch_likelihood_gapped,
+    batch_likelihood_gapped_dual
 )
 from nestedmica.model.background import learn_markov_background, print_background_stats
+from nestedmica.model.gapped_motif import (
+    GapConfig, GappedMotif, GapSpec,
+    propose_insert_gap, propose_delete_gap,
+    propose_perturb_gap_length, propose_shift_block_boundary
+)
 
 def sample_dirichlet_pwm(length: int, alpha: float = 1.0) -> np.ndarray:
     """
@@ -48,7 +55,8 @@ class FastTrainer:
     def __init__(self, sequences: List[Any], num_motifs: int, motif_length: int, 
                  ensemble_size: int, n_jobs: int = -1, both_strands: bool = True,
                  bg_order: int = 3, adaptive_mcmc: bool = False,
-                 seed_pwms: Optional[List[np.ndarray]] = None):
+                 seed_pwms: Optional[List[np.ndarray]] = None,
+                 gap_config: Optional[GapConfig] = None):
         """
         Initialize the trainer.
 
@@ -71,6 +79,7 @@ class FastTrainer:
         self.bg_order = bg_order
         self.adaptive_mcmc = adaptive_mcmc
         self.seed_pwms = seed_pwms  # Optional k-mer enrichment seeds
+        self.gap_config = gap_config if gap_config is not None else GapConfig(allow_gaps=False)
         
         # Number of parallel threads
         self.n_jobs = n_jobs if n_jobs > 0 else multiprocessing.cpu_count()
@@ -296,6 +305,15 @@ class FastTrainer:
         # Convert to list of numpy arrays for mutation
         columns_list = [m.get_columns().copy() for m in motifs]
         
+        # Track gapped motif state if gaps enabled
+        gapped_motifs = None
+        if self.gap_config.allow_gaps:
+            # Initialize as ungapped (single block per motif)
+            gapped_motifs = [
+                GappedMotif.from_contiguous(cols, config=self.gap_config) 
+                for cols in columns_list
+            ]
+        
         # Initial score
         temp_motifs = [CythonWeightMatrix(cols) for cols in columns_list]
         current_hood = self._total_likelihood(temp_motifs, weights)
@@ -307,30 +325,71 @@ class FastTrainer:
         local_accepts = np.zeros(self.num_motifs, dtype=np.float64)
         local_attempts = np.zeros(self.num_motifs, dtype=np.float64)
         
+        # Move probabilities: adjust when gaps enabled
+        if self.gap_config.allow_gaps:
+            # Perturb=50%, Delete=10%, Insert=10%, GapInsert=10%, GapDelete=10%, GapPerturb=10%
+            move_probs = [0.50, 0.10, 0.10, 0.10, 0.10, 0.10]
+            move_types = [0, 1, 2, 3, 4, 5]
+        else:
+            move_probs = [0.7, 0.15, 0.15]
+            move_types = [0, 1, 2]
+        
         for step in range(max_steps):
-            # Choose move type: 0=Perturb(70%), 1=Delete(15%), 2=Insert(15%)
-            move_type = self._rng.choice([0, 1, 2], p=[0.7, 0.15, 0.15])
+            move_type = self._rng.choice(move_types, p=move_probs)
             m_idx = self._rng.integers(self.num_motifs)
             
             old_cols = columns_list[m_idx].copy()
+            hastings_ratio = 0.0  # Log Hastings ratio for RJMCMC
             
-            if move_type == 0: # Perturb
+            if move_type == 0:  # Perturb column
                 length = old_cols.shape[1]
                 if length > 0:
                     c_idx = self._rng.integers(length)
-                    # Use per-motif adaptive alpha
                     alpha = self.proposal_alphas[m_idx] if self.adaptive_mcmc else 10.0
                     columns_list[m_idx][:, c_idx] = self._perturb_column_fast(old_cols[:, c_idx], alpha=alpha)
                     local_attempts[m_idx] += 1
-            elif move_type == 1: # Delete
+                    
+            elif move_type == 1:  # Delete column
                 columns_list[m_idx] = self._delete_column(old_cols)
-            else: # Insert
-                columns_list[m_idx] = self._insert_column(old_cols)            
+                
+            elif move_type == 2:  # Insert column
+                columns_list[m_idx] = self._insert_column(old_cols)
             
-            # Check acceptance
+            elif move_type == 3 and gapped_motifs is not None:  # Gap insert
+                proposed, hastings_ratio = propose_insert_gap(gapped_motifs[m_idx], self._rng)
+                if proposed is not None:
+                    gapped_motifs[m_idx] = proposed
+                    # Flatten to columns for likelihood
+                    all_cols, _, _ = proposed.to_flat_columns()
+                    columns_list[m_idx] = all_cols
+                else:
+                    continue  # Skip invalid proposal
+                    
+            elif move_type == 4 and gapped_motifs is not None:  # Gap delete
+                proposed, hastings_ratio = propose_delete_gap(gapped_motifs[m_idx], self._rng)
+                if proposed is not None:
+                    gapped_motifs[m_idx] = proposed
+                    all_cols, _, _ = proposed.to_flat_columns()
+                    columns_list[m_idx] = all_cols
+                else:
+                    continue
+                    
+            elif move_type == 5 and gapped_motifs is not None:  # Gap length perturb
+                proposed, hastings_ratio = propose_perturb_gap_length(gapped_motifs[m_idx], self._rng)
+                if proposed is not None:
+                    gapped_motifs[m_idx] = proposed
+                    # Note: gap length change doesn't change columns, only scoring
+                else:
+                    continue
+            
+            # Check acceptance (Metropolis-Hastings with Hastings ratio)
             new_hood = self._total_likelihood_from_columns(columns_list, weights)
             
-            if new_hood > min_hood:
+            # For RJMCMC: accept if new_hood + hastings_ratio > min_hood
+            # In log space: new_hood > min_hood - hastings_ratio
+            accept_threshold = min_hood - hastings_ratio
+            
+            if new_hood > accept_threshold:
                 current_hood = new_hood
                 if move_type == 0:
                     local_accepts[m_idx] += 1
@@ -342,6 +401,11 @@ class FastTrainer:
             else:
                 # Revert
                 columns_list[m_idx] = old_cols
+                if gapped_motifs is not None and move_type >= 3:
+                    # Rebuild gapped motif from old columns
+                    gapped_motifs[m_idx] = GappedMotif.from_contiguous(
+                        old_cols, config=self.gap_config
+                    )
                 no_improve_count += 1
             
             if no_improve_count >= early_stop and step > 30:

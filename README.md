@@ -10,6 +10,7 @@ A high-performance Python implementation of the Nested MICA motif discovery algo
 |---------|-------------|
 | **Auto-Discovery** | Automatically determines optimal number of motifs using Bayesian Evidence |
 | **Both-Strand Scanning** | Scans forward and reverse complement for TF binding sites |
+| **Smart Collision Detection** | Automatically prevents planted motifs from overlapping |
 | **Higher-Order Background** | 3rd-order Markov model reduces false positives in biased sequences |
 | **Multiple Output Formats** | XMS, MEME, PFM (JASPAR), TRANSFAC |
 | **K-mer Seeding** | MEME-style k-mer enrichment for seed initialization |
@@ -158,6 +159,49 @@ python3 -m nestedmica.apps.mocca_fast \
 
 ---
 
+## Synthetic Data Generation
+
+Generate benchmark sequences with configurable backgrounds and planted motifs.
+
+### Quick Examples
+
+```bash
+# Simple benchmark
+python -m nestedmica.synthetic generate \
+    -o benchmark.fa -n 100 --motif ACGTACGT
+
+# Variable length + learned background
+python -m nestedmica.synthetic generate \
+    -o chip_sim.fa \
+    --learn-bg-from promoters.fa \
+    --length 200 --length-std 50 \
+    --motif "TATAAAA"
+
+# Gapped motif with shuffled background
+python -m nestedmica.synthetic generate \
+    -o gapped.fa --motif "GCGC[3-8]CACGTG" \
+    --learn-bg-from control.fa --bg-method shuffle
+
+# Full Benchmark Suite (Train/Test)
+python -m nestedmica.synthetic benchmark \
+    -o ./param_search_bench \
+    --motif "TATAAAA" \
+    --train 2000 --test 500
+```
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--motif` | Motif pattern (IUPAC or gapped `[min-max]`) |
+| `--learn-bg-from` | Learn background from FASTA |
+| `--bg-method` | `markov` (generative) or `shuffle` (exact dinucleotide) |
+| `--planting` | `uniform` or `center` (biased towards center) |
+| `--length-std` | Variable-length (ChIP-seq style) |
+| `benchmark` | Subcommand to generate full train/test suites |
+
+---
+
 ## Directory Structure
 
 ```
@@ -168,6 +212,10 @@ nestedmica/
 ├── model/
 │   ├── background.py    # Markov background model
 │   └── cython_model.pyx # Optimized DP likelihood
+├── synthetic/           # Benchmark data generation
+│   ├── background.py    # Background generators
+│   ├── motifs.py        # Motif definitions
+│   └── cli.py           # CLI interface
 ├── trainer/
 │   └── fast.py          # Nested Sampling engine
 └── utils/

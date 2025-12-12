@@ -15,6 +15,7 @@ from nestedmica.utils.console import AsciiPlotter
 from nestedmica.utils.checkpoint import save_checkpoint, load_checkpoint
 from nestedmica.utils.export import export_xms, export_meme, export_pfm, export_transfac
 from nestedmica.utils.kmer_seeds import generate_seed_pwms
+from nestedmica.model.gapped_motif import GapConfig, GapPriorType
 
 def main():
     parser = argparse.ArgumentParser(description='Fast Cython-optimized Mocca')
@@ -39,6 +40,17 @@ def main():
                         help='Output format (default: xms)')
     parser.add_argument('-kmerSeeds', action='store_true', default=False,
                         help='Use k-mer enrichment for seed initialization (MEME-style)')
+    # Gapped motif arguments
+    parser.add_argument('-allowGaps', action='store_true', default=False,
+                        help='Enable gapped motif discovery')
+    parser.add_argument('-minGapLength', type=int, default=0,
+                        help='Minimum gap length (default: 0)')
+    parser.add_argument('-maxGapLength', type=int, default=20,
+                        help='Maximum gap length (default: 20)')
+    parser.add_argument('-maxNumGaps', type=int, default=2,
+                        help='Maximum number of gaps per motif (default: 2)')
+    parser.add_argument('-gapPrior', choices=['geometric', 'uniform', 'poisson'], default='geometric',
+                        help='Gap length prior distribution (default: geometric)')
     args = parser.parse_args()
     
     print(f"Loading sequences from {args.seqs}...")
@@ -65,10 +77,28 @@ def main():
             else:
                 print("  No enriched k-mers found, using random initialization")
         
+        # Build gap config if gapped motifs enabled
+        gap_config = None
+        if args.allowGaps:
+            prior_map = {
+                'geometric': GapPriorType.GEOMETRIC,
+                'uniform': GapPriorType.UNIFORM,
+                'poisson': GapPriorType.POISSON
+            }
+            gap_config = GapConfig(
+                allow_gaps=True,
+                min_gap_length=args.minGapLength,
+                max_gap_length=args.maxGapLength,
+                max_num_gaps=args.maxNumGaps,
+                gap_prior=prior_map[args.gapPrior]
+            )
+            print(f"Gapped motif discovery: ENABLED (gaps: {args.minGapLength}-{args.maxGapLength}, max: {args.maxNumGaps})")
+        
         print("Initializing Cython Data-Oriented Threaded trainer...")
         trainer = FastTrainer(sequences, args.numMotifs, args.motifLength, 
                              args.ensembleSize, n_jobs=args.threads, bg_order=args.bgOrder,
-                             adaptive_mcmc=args.adaptiveMCMC, seed_pwms=seed_pwms)
+                             adaptive_mcmc=args.adaptiveMCMC, seed_pwms=seed_pwms,
+                             gap_config=gap_config)
     
     print("Starting sampling...")
     start_time = time.time()
