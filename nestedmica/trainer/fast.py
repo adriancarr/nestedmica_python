@@ -121,6 +121,9 @@ class FastTrainer:
         if adaptive_mcmc:
             print("Adaptive MCMC proposals: ENABLED")
         
+        # Thread-safe random number generator
+        self._rng = np.random.default_rng()
+        
         # Pre-allocate for Dirichlet
         self._dirichlet_alpha = np.zeros(4, dtype=np.float64)
         
@@ -263,21 +266,21 @@ class FastTrainer:
         probs = np.maximum(probs, 1e-10)
         probs /= probs.sum()
         self._dirichlet_alpha[:] = probs * alpha + 0.1
-        new_probs = np.random.dirichlet(self._dirichlet_alpha)
+        new_probs = self._rng.dirichlet(self._dirichlet_alpha)
         return np.log2(new_probs + 1e-10)
 
     def _delete_column(self, cols: np.ndarray) -> np.ndarray:
         """Remove a random column (Delete)."""
         length = cols.shape[1]
         if length <= 5: return cols # Min length constraint
-        idx = np.random.randint(length)
+        idx = self._rng.integers(length)
         return np.delete(cols, idx, axis=1)
 
     def _insert_column(self, cols: np.ndarray) -> np.ndarray:
         """Insert a random column (Insert)."""
         length = cols.shape[1]
         if length >= 20: return cols # Max length constraint
-        idx = np.random.randint(length + 1)
+        idx = self._rng.integers(length + 1)
         new_col = sample_dirichlet_pwm(1) # Shape (4, 1)
         return np.insert(cols, idx, new_col[:, 0], axis=1)
     
@@ -299,15 +302,15 @@ class FastTrainer:
         
         for step in range(max_steps):
             # Choose move type: 0=Perturb(70%), 1=Delete(15%), 2=Insert(15%)
-            move_type = np.random.choice([0, 1, 2], p=[0.7, 0.15, 0.15])
-            m_idx = np.random.randint(self.num_motifs)
+            move_type = self._rng.choice([0, 1, 2], p=[0.7, 0.15, 0.15])
+            m_idx = self._rng.integers(self.num_motifs)
             
             old_cols = columns_list[m_idx].copy()
             
             if move_type == 0: # Perturb
                 length = old_cols.shape[1]
                 if length > 0:
-                    c_idx = np.random.randint(length)
+                    c_idx = self._rng.integers(length)
                     # Use per-motif adaptive alpha
                     alpha = self.proposal_alphas[m_idx] if self.adaptive_mcmc else 10.0
                     columns_list[m_idx][:, c_idx] = self._perturb_column_fast(old_cols[:, c_idx], alpha=alpha)
@@ -369,7 +372,7 @@ class FastTrainer:
         worst = self.models.pop(min_idx)
         self.model_likelihoods.pop(min_idx)
         
-        survivor_idx = np.random.randint(len(self.models))
+        survivor_idx = self._rng.integers(len(self.models))
         survivor = self.models[survivor_idx]
         
         new_motifs, new_hood = self._decorrelate_adaptive(
