@@ -21,6 +21,7 @@ ant-build/
 downloads/
 java/
 ant/
+source/
 *.tar.gz
 jdk*/
 java_arm/
