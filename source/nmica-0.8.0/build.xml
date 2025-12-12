@@ -1,0 +1,131 @@
+<?xml version="1.0"?>
+<project name="nmica" default="all" basedir=".">
+  <property environment="env" />
+  <target name="all" depends="package-java,build-native" />
+
+  <target name="init">
+    <tstamp />
+    <property name="version" value="0.8alpha" />
+    <property name="bin.dir" value="./bin" />
+    <property name="lib.dir" value="./lib" />
+    <property name="src.main.dir" value="./src" />
+    <property name="native.dir" value="./native" />
+    <property name="manifest.dir" value="./manifest" />
+    <property name="resources.dir" value="./resources" />
+    <property name="build.dir" value="./ant-build" />
+    <property name="build.classes.dir" value="${build.dir}/classes" />
+    <property name="build.headers.dir" value="${build.dir}/headers" />
+    <property name="build.dest.main" value="${build.classes.dir}/nmica" />
+    <property name="jar.main" value="${lib.dir}/nmica.jar" />
+    <property name="manifest.file.main" value="${manifest.dir}/nmica.txt" />
+    <property name="src.build.dir" value="./src-build" />
+    <property name="build.dest.build" value="${build.classes.dir}/build" />
+    
+    <property name="classpath" value="${lib.dir}/biojava.jar:${lib.dir}/bytecode.jar:${lib.dir}/bjv2-core-0.1.jar:${lib.dir}/stax-api-1.0.1.jar:${build.dest.build}" />
+
+    <available file="gcc" filepath="${env.PATH}" property="native.has_gcc" />
+  </target>
+
+  <target name="prepare" depends="init">
+    <mkdir dir="${build.dir}" />
+    <mkdir dir="${build.headers.dir}" />
+    <mkdir dir="${build.dest.main}" />
+    <mkdir dir="${build.dest.build}" />
+  </target>
+
+  <target name="compile-bootstrap-java" depends="prepare">
+      <javac destdir="${build.dest.build}"
+             srcdir="${src.build.dir}"
+             includeantruntime="false"
+             source="1.8"
+             target="1.8">
+          <exclude name="**/*Processor*.java"/>
+      </javac>
+  </target>
+
+  <target name="compile-java" depends="compile-bootstrap-java">
+    <javac destdir="${build.dest.main}"
+           srcdir="${src.main.dir}"
+           includeantruntime="false"
+           debug="true"
+           source="1.8"
+           target="1.8">
+      <classpath>
+        <pathelement path="${classpath}" />
+      </classpath>
+      <compilerarg value="-h"/>
+      <compilerarg value="${build.headers.dir}"/>
+      <exclude name="net/derkholm/nmica/demos/**/*.java"/>
+    </javac>
+  </target>
+
+  <target name="build-native" depends="compile-java,build-native-prep,compile-native,link-native-darwin,link-native-unix">
+  </target>
+
+  <target name="build-native-prep">
+     <property name="native.cc" value="gcc" />
+     <property name="native.cc.optimization" value="-O3" />
+     
+     <condition property="native.build.endian" value="NMICA_LITTLE_ENDIAN" else="NMICA_BIG_ENDIAN">
+       <!-- Assuming little endian for Mac/Arm64 although Java ignores it mostly -->
+       <equals arg1="little" arg2="little" /> 
+     </condition>
+     
+     <condition property="native.darwin_linker">
+       <os family="mac" />
+     </condition>
+     
+      <!-- Include paths for JNI -->
+     <exec executable="/usr/libexec/java_home" outputproperty="java.home.output">
+     </exec>
+      <!-- If that fails, rely on JAVA_HOME env -->
+     
+     <property name="native.include" value="-I${env.JAVA_HOME}/include -I${env.JAVA_HOME}/include/darwin" />
+     <property name="native.include.all" value="-I../ant-build/headers ${native.include}" />
+  </target>
+
+  <target name="compile-native">
+    <apply executable="${native.cc}" dir="${native.dir}" relative="true" verbose="true">
+      <arg value="-c" />
+      <arg value="-std=c99" />
+      <arg line="${native.cc.optimization}" />
+      <arg line="-fPIC" />
+      <arg line="${native.include.all}" />
+      <arg value="-D${native.build.endian}" />
+      <fileset dir="${native.dir}">
+        <include name="*.c" />
+      </fileset>
+    </apply>
+  </target>
+
+  <target name="link-native-darwin" if="native.darwin_linker">
+    <apply executable="${native.cc}" dir="${native.dir}" relative="true" parallel="true" verbose="true">
+      <arg value="-dynamiclib" />
+      <arg value="-o" />
+      <arg value="libnmica.jnilib" />
+      <fileset dir="${native.dir}">
+        <include name="*.o" />
+      </fileset>
+    </apply>
+    <!-- Copy libs to lib dir for easier loading if needed, or leave in native -->
+  </target>
+
+  <target name="link-native-unix" unless="native.darwin_linker">
+    <apply executable="${native.cc}" dir="${native.dir}" relative="true" parallel="true" verbose="true">
+      <arg value="-shared" />
+      <arg value="-o" />
+      <arg value="libnmica.so" />
+      <fileset dir="${native.dir}">
+        <include name="*.o" />
+      </fileset>
+    </apply>
+  </target>
+
+  <target name="package-java" depends="compile-java">
+    <jar jarfile="${jar.main}" manifest="${manifest.file.main}">
+      <fileset dir="${build.dest.main}" />
+      <fileset dir="${resources.dir}" />
+    </jar>
+  </target>
+
+</project>

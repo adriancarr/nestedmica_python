@@ -1,0 +1,2 @@
+NMICA_APPCLASS=MakeMosaicBackgroundApplication
+NMICA_JVM=-server

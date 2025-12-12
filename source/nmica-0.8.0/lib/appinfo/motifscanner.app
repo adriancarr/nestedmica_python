@@ -1,0 +1,1 @@
+NMICA_APPCLASS=MotifScannerApplication

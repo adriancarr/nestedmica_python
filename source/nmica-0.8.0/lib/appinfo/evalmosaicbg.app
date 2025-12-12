@@ -1,0 +1,2 @@
+NMICA_APPCLASS=EvaluateMosaicClassesApplication
+NMICA_JVM=-server

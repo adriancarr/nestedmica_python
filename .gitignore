@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.pyc
+build/
+dist/
+*.egg-info/
+.DS_Store
+
+# C extensions
+*.so
+nestedmica/model/*.c
+nestedmica/model/*.html
+
+# Java Build
+ant-build/
+*.class
+*.jar
+*.war
+
+# Environment / Downloads
+downloads/
+java/
+ant/
+*.tar.gz
+jdk*/
+java_arm/
+
+# Data and Outputs
+*.fa
+*.xms
+*.txt
+*.png
+*.pkl
+*_log.txt
+*.log
+
+# Checkpoints
+*_cp.pkl
