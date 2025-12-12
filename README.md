@@ -2,7 +2,7 @@
 
 A high-performance Python implementation of the Nested MICA motif discovery algorithm, featuring Cython optimization, parallel processing, and rigorous Bayesian model selection.
 
-**Version**: 1.2.0
+**Version**: 1.2.2
 
 ## Features
 
@@ -11,10 +11,13 @@ A high-performance Python implementation of the Nested MICA motif discovery algo
 | **Auto-Discovery** | Automatically determines optimal number of motifs using Bayesian Evidence |
 | **Both-Strand Scanning** | Scans forward and reverse complement for TF binding sites |
 | **Higher-Order Background** | 3rd-order Markov model reduces false positives in biased sequences |
-| **Adaptive MCMC** *(experimental)* | Dynamically adjusts proposal distribution for faster convergence |
+| **Multiple Output Formats** | XMS, MEME, PFM (JASPAR), TRANSFAC |
+| **K-mer Seeding** | MEME-style k-mer enrichment for seed initialization |
+| **Skilling's H Convergence** | Information-theoretic convergence criterion |
 | **Variable Length Motifs** | Insert/Delete moves for dynamic motif sizing |
 | **Parallel Processing** | Multi-threaded Cython for ~3x speedup over Java |
 | **Checkpointing** | Save/restore training state for long-running jobs |
+| **Adaptive MCMC** *(experimental)* | Dynamically adjusts proposal distribution |
 
 ---
 
@@ -49,7 +52,8 @@ python3 -m nestedmica.apps.mocca_fast \
   -numMotifs 3 \
   -motifLength 12 \
   -threads 8 \
-  -out result.xms
+  -format meme \
+  -out result.meme
 ```
 
 ---
@@ -68,23 +72,26 @@ python3 -m nestedmica.apps.mocca_fast \
 | `-ensembleSize` | *auto* | Particle count (auto: 50×log₁₀(bases)) |
 | `-threads` | -1 | Number of threads (-1 = all cores) |
 | `-bgOrder` | 3 | Background Markov order (0-5) |
-| `-adaptiveMCMC` | True | Use adaptive proposal distribution |
-| `-noAdaptiveMCMC` | — | Disable adaptive proposals |
+| `-adaptiveMCMC` | False | [EXPERIMENTAL] Use adaptive proposal distribution |
 
 ### `mocca_fast` (Manual Run)
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `-seqs` | *required* | Input FASTA file |
-| `-out` | *required* | Output XMS file |
+| `-out` | *required* | Output file |
 | `-numMotifs` | 1 | Number of motifs to find |
 | `-motifLength` | 10 | Initial motif length |
 | `-maxCycles` | 500 | Maximum sampling cycles |
 | `-ensembleSize` | 20 | Particle count |
-| `-stopIqr` | 0.01 | Convergence threshold (IQR of ensemble) |
 | `-threads` | -1 | Number of threads (-1 = all cores) |
 | `-bgOrder` | 3 | Background Markov order (0-5) |
-| `-adaptiveMCMC` | True | Use adaptive proposal distribution |
+| `-format` | xms | Output format: `xms`, `meme`, `pfm`, `transfac` |
+| `-convergenceMode` | skilling | Convergence: `skilling` (H-hat) or `iqr` |
+| `-stopH` | 0.1 | H-hat convergence threshold |
+| `-stopIqr` | 0.01 | IQR convergence threshold |
+| `-kmerSeeds` | False | Use k-mer enrichment for seeding |
+| `-adaptiveMCMC` | False | [EXPERIMENTAL] Use adaptive proposals |
 | `-checkpoint` | — | File to save checkpoints |
 | `-restart` | — | Checkpoint to resume from |
 
