@@ -47,7 +47,7 @@ class FastTrainer:
     
     def __init__(self, sequences: List[Any], num_motifs: int, motif_length: int, 
                  ensemble_size: int, n_jobs: int = -1, both_strands: bool = True,
-                 bg_order: int = 3):
+                 bg_order: int = 3, adaptive_mcmc: bool = False):
         """
         Initialize the trainer.
 
@@ -59,6 +59,7 @@ class FastTrainer:
             n_jobs (int): Threads (-1 for all cores).
             both_strands (bool): Scan both strands (default: True).
             bg_order (int): Background Markov order (default: 3).
+            adaptive_mcmc (bool): Use adaptive proposal distribution (default: True).
         """
         self.sequences = sequences
         self.num_motifs = num_motifs
@@ -67,6 +68,7 @@ class FastTrainer:
         self.num_sequences = len(sequences)
         self.both_strands = both_strands
         self.bg_order = bg_order
+        self.adaptive_mcmc = adaptive_mcmc
         
         # Number of parallel threads
         self.n_jobs = n_jobs if n_jobs > 0 else multiprocessing.cpu_count()
@@ -111,6 +113,13 @@ class FastTrainer:
         # Learn higher-order background model
         self.bg_model = learn_markov_background(sequences, order=bg_order)
         print_background_stats(self.bg_model, bg_order)
+        
+        # Adaptive MCMC: per-motif proposal concentration and acceptance tracking
+        self.proposal_alphas = np.full(num_motifs, 10.0, dtype=np.float64)
+        self.accept_counts = np.zeros(num_motifs, dtype=np.float64)
+        self.attempt_counts = np.zeros(num_motifs, dtype=np.float64)
+        if adaptive_mcmc:
+            print("Adaptive MCMC proposals: ENABLED")
         
         # Pre-allocate for Dirichlet
         self._dirichlet_alpha = np.zeros(4, dtype=np.float64)
@@ -273,7 +282,7 @@ class FastTrainer:
         return np.insert(cols, idx, new_col[:, 0], axis=1)
     
     def _decorrelate_adaptive(self, motifs, weights, min_hood, max_steps=100, early_stop=20) -> Tuple[List[Any], float]:
-        """Adaptive M-H decorrelation with Variable Length moves."""
+        """Adaptive M-H decorrelation with Variable Length moves and adaptive proposals."""
         # Convert to list of numpy arrays for mutation
         columns_list = [m.get_columns().copy() for m in motifs]
         
@@ -283,6 +292,10 @@ class FastTrainer:
         
         no_improve_count = 0
         best_hood = current_hood
+        
+        # Per-motif tracking for this decorrelation cycle
+        local_accepts = np.zeros(self.num_motifs, dtype=np.float64)
+        local_attempts = np.zeros(self.num_motifs, dtype=np.float64)
         
         for step in range(max_steps):
             # Choose move type: 0=Perturb(70%), 1=Delete(15%), 2=Insert(15%)
@@ -295,16 +308,22 @@ class FastTrainer:
                 length = old_cols.shape[1]
                 if length > 0:
                     c_idx = np.random.randint(length)
-                    columns_list[m_idx][:, c_idx] = self._perturb_column_fast(old_cols[:, c_idx])
+                    # Use per-motif adaptive alpha
+                    alpha = self.proposal_alphas[m_idx] if self.adaptive_mcmc else 10.0
+                    columns_list[m_idx][:, c_idx] = self._perturb_column_fast(old_cols[:, c_idx], alpha=alpha)
+                    local_attempts[m_idx] += 1
             elif move_type == 1: # Delete
                 columns_list[m_idx] = self._delete_column(old_cols)
             else: # Insert
                 columns_list[m_idx] = self._insert_column(old_cols)            
+            
             # Check acceptance
             new_hood = self._total_likelihood_from_columns(columns_list, weights)
             
             if new_hood > min_hood:
                 current_hood = new_hood
+                if move_type == 0:
+                    local_accepts[m_idx] += 1
                 if new_hood > best_hood:
                     best_hood = new_hood
                     no_improve_count = 0
@@ -317,6 +336,23 @@ class FastTrainer:
             
             if no_improve_count >= early_stop and step > 30:
                 break
+        
+        # Adapt proposal alphas based on acceptance rate
+        if self.adaptive_mcmc:
+            for m in range(self.num_motifs):
+                if local_attempts[m] >= 5:
+                    rate = local_accepts[m] / local_attempts[m]
+                    # Target ~23% acceptance rate
+                    if rate > 0.35:
+                        self.proposal_alphas[m] *= 1.3  # Too many accepts: explore more
+                    elif rate < 0.15:
+                        self.proposal_alphas[m] /= 1.3  # Too many rejects: fine-tune
+                    # Clamp to [1.0, 1000.0]
+                    self.proposal_alphas[m] = np.clip(self.proposal_alphas[m], 1.0, 1000.0)
+            
+            # Update global tracking
+            self.accept_counts += local_accepts
+            self.attempt_counts += local_attempts
         
         new_motifs = [CythonWeightMatrix(cols.astype(np.float64)) for cols in columns_list]
         return new_motifs, current_hood

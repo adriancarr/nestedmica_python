@@ -28,6 +28,8 @@ def main():
     parser.add_argument('-checkpointInterval', type=int, default=100)
     parser.add_argument('-restart', help='Checkpoint file to restart from')
     parser.add_argument('-bgOrder', type=int, default=3, help='Background Markov order (0-5, default=3)')
+    parser.add_argument('-adaptiveMCMC', action='store_true', default=False, help='[EXPERIMENTAL] Use adaptive proposals')
+    parser.add_argument('-noAdaptiveMCMC', action='store_false', dest='adaptiveMCMC', help='Use fixed proposals (default)')
     args = parser.parse_args()
     
     print(f"Loading sequences from {args.seqs}...")
@@ -46,7 +48,8 @@ def main():
     else:
         print("Initializing Cython Data-Oriented Threaded trainer...")
         trainer = FastTrainer(sequences, args.numMotifs, args.motifLength, 
-                             args.ensembleSize, n_jobs=args.threads, bg_order=args.bgOrder)
+                             args.ensembleSize, n_jobs=args.threads, bg_order=args.bgOrder,
+                             adaptive_mcmc=args.adaptiveMCMC)
     
     print("Starting sampling...")
     start_time = time.time()

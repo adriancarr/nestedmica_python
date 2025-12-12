@@ -21,7 +21,8 @@ def run_model(sequences, num_motifs, args):
     # We use a default starting length, let Indel/Zap handle the rest.
     start_length = args.startLength 
     trainer = FastTrainer(sequences, num_motifs, start_length, 
-                          args.ensembleSize, n_jobs=args.threads, bg_order=args.bgOrder)
+                          args.ensembleSize, n_jobs=args.threads, bg_order=args.bgOrder,
+                          adaptive_mcmc=args.adaptiveMCMC)
     
     plotter_iqr = AsciiPlotter(height=3, width=40)
     
@@ -93,6 +94,8 @@ def main():
     parser.add_argument('-startLength', type=int, default=10, help='Initial motif length')
     parser.add_argument('-threads', type=int, default=-1, help='Number of threads')
     parser.add_argument('-bgOrder', type=int, default=3, help='Background Markov order (0-5, default=3)')
+    parser.add_argument('-adaptiveMCMC', action='store_true', default=False, help='[EXPERIMENTAL] Use adaptive proposals')
+    parser.add_argument('-noAdaptiveMCMC', action='store_false', dest='adaptiveMCMC', help='Use fixed proposals (default)')
     
     args = parser.parse_args()
     
